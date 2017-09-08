@@ -52,7 +52,22 @@ impl<P, T, SinkErr, StreamErr, Data, R> Dialogue<P, T, SinkErr, StreamErr, Data,
           T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>,
           R: Role
 {
-    /// Create a new `Dialogue` over the given transport.
+    /// Creates a new `Dialogue` over the given transport.
+    pub fn new(transport: T) -> Dialogue<P, T, SinkErr, StreamErr, Data, R> {
+        unimplemented!()
+    }
+
+    /// Gracefully shuts down the `Dialogue`.
+    pub fn close(&mut self) -> Poll<(), TransportError<SinkErr, StreamErr>> {
+        unimplemented!()
+    }
+
+    /// Terminates the `Dialogue` without a proper handshake. Termination is
+    /// signalled to the peer, then this side of the `Dialogue` is terminated
+    /// immediately without waiting for any confirmation.
+    pub fn abort(&mut self) -> Poll<(), TransportError<SinkErr, StreamErr>> {
+        unimplemented!()
+    }
 
     /// After starting sending packets via `message`, `request` or `duplex`
     /// this must be called to ensure that the packets have been written to the
