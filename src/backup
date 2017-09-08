@@ -1,0 +1,445 @@
+use std::marker::PhantomData;
+
+use futures::{Future, Sink, Stream, Poll, StartSend};
+
+use packet::{PacketWritable, PacketReadable, PacketId, PacketType};
+use transport_error::TransportError;
+
+/// The main struct for communicating with a peer.
+///
+/// Incoming packets are emitted via the `Stream` implementation of `Dialogue`.
+/// Packets can be sent via the corresponding methods of the struct.
+pub struct Dialogue<P, T, SinkErr, StreamErr, Data> {
+    transport: T,
+    packet_type: PhantomData<P>,
+    sink_err_type: PhantomData<SinkErr>,
+    stream_err_type: PhantomData<StreamErr>,
+    data_type: PhantomData<Data>,
+}
+
+impl<P, T, SinkErr, StreamErr, Data> Dialogue<P, T, SinkErr, StreamErr, Data>
+    where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+{
+    /// After starting sending packets via `message`, `request` or `duplex`
+    /// this must be called to ensure that the packets have been written to the
+    /// underlying transport. This simply delegates to `transport.poll_complete()`.
+    pub fn poll_complete(&mut self) -> Poll<(), SinkErr> {
+        self.transport.poll_complete()
+    }
+
+    /// Start sending the given packet as a message.
+    ///
+    /// This method takes care of setting the correct `PacketId` and `PacketType`
+    /// of the packet.
+    ///
+    /// Passing a packet without any data leads to wrong communication (the peer
+    /// will interpret it as the end of the dialogue). In debug mode, this method
+    /// panics if the given packet carries no data.
+    ///
+    /// You have to call poll_complete to actually send the packet.
+    pub fn message(&mut self, mut packet: P) -> StartSend<P, ()> {
+        debug_assert!(!packet.is_empty());
+
+        unimplemented!()
+    }
+
+    /// Start sending the given packet as a request.
+    ///
+    /// This method takes care of setting the correct `PacketId` and flags on
+    /// the packet.
+    ///
+    /// Passing a packet without any data leads to wrong communication (the peer
+    /// will interpret it as a request cancellation). In debug mode, this method
+    /// panics if the given packet carries no data.
+    ///
+    /// If sending fails, the returned `Response` `Future` yields an error.
+    ///
+    /// You have to call poll_complete to actually send the packet.
+    pub fn request(&mut self, mut packet: P) -> Response<P, T, SinkErr, StreamErr, Data> {
+        debug_assert!(!packet.is_empty());
+
+        unimplemented!()
+    }
+
+    /// Start sending the given packet as a duplex.
+    ///
+    /// This method takes care of setting the correct `PacketId` and flags on
+    /// the packet.
+    ///
+    /// Passing a packet without any data leads to wrong communication (the peer
+    /// may not know what kind of duplex to open). In debug mode, this method
+    /// panics if the given packet carries no data.
+    ///
+    /// If sending fails, the returned `Duplex`'s `Stream` and `Sink`
+    /// implementations directly yield errors since the dialogue closed (erronously).
+    ///
+    /// You have to call poll_complete to actually send the packet.
+    pub fn duplex(&mut self, mut packet: P) -> Duplex<P, T, SinkErr, StreamErr, Data, OutDuplex> {
+        debug_assert!(!packet.is_empty());
+
+        unimplemented!()
+    }
+
+    // TODO stream, sink, reduce_stream, reduce_sink
+
+    /// Creates a `Request` which allows correct handling of the packet. Use
+    /// this for incoming packets for which
+    /// packet.get_type() == PacketType::Request` is true.
+    ///
+    /// Passing a packet which is not an incoming request packet will lead to
+    /// wrong communication.
+    ///
+    /// In debug mode, this method checks `packet.get_type() == PacketType::Request`
+    /// and panics if it does not return true.
+    pub fn packet_as_request(&mut self, packet: P) -> Request<P, T, SinkErr, StreamErr, Data> {
+        debug_assert!(packet.get_type() == PacketType::Request);
+
+        unimplemented!()
+    }
+
+    // /// Creates a `Duplex` which allows correct handling of the packet.
+    // ///
+    // /// Passing a packet which is not an incoming duplex packet will lead to
+    // /// wrong communication. Use `packet.is_incoming_duplex()` to determine
+    // /// whether to call this method.
+    // ///
+    // /// In debug mode, this method checks `packet.is_incoming_duplex()` and
+    // /// panics if it does not return true.
+    // pub fn packet_as_duplex(&mut self, packet: P) -> Duplex<P, T, SinkErr, StreamErr, Data> {
+    //     debug_assert!(packet.is_incoming_duplex());
+    //
+    //     unimplemented!()
+    // }
+    //
+    // // TODO variations of this for restricted duplexes: Stream, Sink, ReduceStream, ReduceSink
+}
+
+/// All incoming packets with fresh ids are emitted via this stream instance.
+///
+/// To correctly use the packets, use the `packet_as_request` and `packet_as_duplex`
+/// methods of the `Dialogue`. TODO list other methods
+///
+/// Even if you want to ignore all incoming requests, you must still consume
+/// this stream. Else, responses from the peer are not consumed either.
+impl<P, T, SinkErr, StreamErr, Data> Stream for Dialogue<P, T, SinkErr, StreamErr, Data>
+    where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+{
+    type Item = P;
+    type Error = TransportError<SinkErr, StreamErr>;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        unimplemented!()
+    }
+}
+
+/// A request that has been received from the peer.
+///
+/// This implements `Future` to be notified when/if the peer cancels the request.
+pub struct Request<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> {
+    ps: &'ps mut Dialogue<P, T, SinkErr, StreamErr, Data>,
+    packet: P,
+}
+
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Request<'ps,
+                                                                           P,
+                                                                           T,
+                                                                           SinkErr,
+                                                                           StreamErr,
+                                                                           Data>
+    where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+{
+    /// Gets the id of the request.
+    pub fn get_id(&self) -> PacketId {
+        unimplemented!()
+    }
+
+    /// Gets the data that was sent with the request.
+    pub fn get_data(&self) -> Option<Data> {
+        self.packet.get_data()
+    }
+
+    /// Consumes the `Request` and writes a response to the peer.
+    ///
+    /// This method sets id and flags of the packet.
+    ///
+    /// The `StartSend` error variant is returned if the packet stream has closed.
+    ///
+    /// To make sure the response has actually been sent, call `poll_complete`
+    /// on either the `Request` or the `Dialogue`.
+    pub fn start_responding(self, response: P) -> StartSend<Self, ()> {
+        unimplemented!()
+    }
+
+    /// Consumes the `Request` and cancels it.
+    ///
+    /// The `StartSend` error variant is returned if the packet stream has closed.
+    ///
+    /// To make sure the cancellation has actually been sent, call `poll_complete`
+    /// on either the `Request` or the `Dialogue`.
+    pub fn start_cancelling(self) -> StartSend<Self, ()> {
+        unimplemented!()
+    }
+
+    /// Delegates to the `poll_complete` method of the `Dialogue`.
+    pub fn poll_complete(&mut self) -> Poll<(), ()> {
+        unimplemented!()
+    }
+}
+
+/// The future completes when this request is cancelled. It may never complete.
+/// It is guaranteed to never yield an error (and the error type will be changed
+/// once `!` becomes a legal rust type).
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Future
+    for Request<'ps, P, T, SinkErr, StreamErr, Data>
+    where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+{
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        unimplemented!();
+    }
+}
+
+/// When dropping a `Request`, the corresponding `Dialogue` is notified so
+/// that it stops waiting for cancellation.
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Drop
+    for Request<'ps, P, T, SinkErr, StreamErr, Data> {
+    fn drop(&mut self) {
+        unimplemented!()
+    }
+}
+
+/// Type-Level indicator for whether a `Duplex` has been initiated by this side
+/// of the dialogue (`is_out() == true`) or not.
+pub trait DuplexType {
+    /// Returns whether the corresponding `Duplex` has has been initiated by
+    /// this side of the dialogue.
+    fn is_out() -> bool;
+}
+
+/// Signifies a `Duplex` initiated by this side of the dialogue.
+pub enum OutDuplex {}
+
+impl DuplexType for OutDuplex {
+    fn is_out() -> bool {
+        true
+    }
+}
+
+/// Signifies a `Duplex` *not* initiated by this side of the dialogue.
+pub enum InDuplex {}
+
+impl DuplexType for InDuplex {
+    fn is_out() -> bool {
+        false
+    }
+}
+
+/// A duplex connection with the peer.
+///
+/// The `DuplexType` parameter does not exist at runtime, it just enforces some
+/// static type safety about how duplex cancellation works.
+pub struct Duplex<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, DuplexType: 'static> {
+    ps: &'ps mut Dialogue<P, T, SinkErr, StreamErr, Data>,
+    duplex_type: PhantomData<DuplexType>,
+}
+
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, DuplexType: 'static>
+    Duplex<'ps, P, T, SinkErr, StreamErr, Data, DuplexType>
+    where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+{
+    /// Gets the id of the duplex.
+    pub fn get_id(&self) -> PacketId {
+        unimplemented!()
+    }
+}
+
+/// Packet written to this sink are passed to the corresponding stream on the
+/// peer's side.
+///
+/// An error is emitted if the Dialogue has closed.
+///
+/// TODO signal errors to the peer
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, DuplexType: 'static> Sink
+    for
+    Duplex<'ps, P, T, SinkErr, StreamErr, Data, DuplexType>
+    where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+{
+    type SinkItem = P;
+    type SinkError = ();
+
+    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+        unimplemented!()
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        unimplemented!()
+    }
+
+    /// Closes the sink as well as the stream half of the duplex.
+    fn close(&mut self) -> Poll<(), Self::SinkError> {
+        unimplemented!()
+    }
+}
+
+/// Packet written to the peer's corresponding sink are passed to this sink.
+///
+/// An error is emitted if the Dialogue has closed.
+///
+/// TODO receiving errors
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, DuplexType: 'static> Stream
+    for
+    Duplex<'ps, P, T, SinkErr, StreamErr, Data, DuplexType>
+    where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+{
+    type Item = P;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        unimplemented!()
+    }
+}
+
+/// When dropping a `Duplex`, the corresponding `Dialogue` is notified so
+/// that it stops waiting for more duplex packets.
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, DuplexType: 'static> Drop
+    for
+    Duplex<'ps, P, T, SinkErr, StreamErr, Data, DuplexType> {
+    fn drop(&mut self) {
+        unimplemented!()
+    }
+}
+
+/// This type represents the future response to a request. It also allows to
+/// cancel the original request.
+pub struct Response<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> {
+    ps: &'ps mut Dialogue<P, T, SinkErr, StreamErr, Data>,
+}
+
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Response<'ps,
+                                                                            P,
+                                                                            T,
+                                                                            SinkErr,
+                                                                            StreamErr,
+                                                                            Data>
+    where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+{
+    /// Gets the id of the original request.
+    pub fn get_id(&self) -> PacketId {
+        unimplemented!()
+    }
+
+    /// Cancel the original request. To make sure the response has actually been
+    /// sent, call `poll_complete` on either the `Response` or the `Dialogue`.
+    ///
+    /// Once the original request has been cancelled, this `Response` should be
+    /// dropped.
+    pub fn start_cancel() -> StartSend<Self, ()> {
+        unimplemented!()
+    }
+
+    /// Delegates to the `poll_complete` method of the `Dialogue`.
+    ///
+    /// Once the original request has been cancelled, this `Response` should be
+    /// dropped.
+    pub fn poll_complete(&mut self) -> Poll<(), ()> {
+        unimplemented!()
+    }
+}
+
+/// The `Future` completes with `Some(P)` when the response to the original
+/// request was received. It completes with `None` if the peer chose not to
+/// answer the request (signalled via an empty response packet).
+///
+/// It errors if the underlying `Dialogue` has shut down.
+///
+/// If the original request has been cancelled by this side of the dialogue,
+/// this future may never resolve and should be `drop`ped.
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Future
+    for Response<'ps, P, T, SinkErr, StreamErr, Data>
+    where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+{
+    type Item = Option<P>;
+    type Error = (); // TODO
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        unimplemented!();
+    }
+}
+
+/// When dropping a `Response`, the corresponding `Dialogue` is notified so
+/// that it stops waiting for the response packet.
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Drop
+    for Response<'ps, P, T, SinkErr, StreamErr, Data> {
+    fn drop(&mut self) {
+        unimplemented!()
+    }
+}
+
+////////////////
+////////////////
+////////////////
+
+// packet.rs
+
+/// Each packet has a PacketId, to identify it for multiplexing.
+pub type PacketId = u32;
+
+/// The different types a packet can have.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum PacketType {
+    Message,
+    Request,
+    Response,
+    DuplexInitial,
+    DuplexRequest,
+    DuplexResponse,
+    DuplexRequestEnd,
+    DuplexResponseEnd,
+}
+
+/// Values implementing this trait can be sent via a `Dialogue`.
+pub trait PacketWritable {
+    /// The data carried by the packet.
+    type Data;
+
+    /// Sets the `PacketId` of the packet.
+    fn set_id(&mut self, id: PacketId);
+
+    /// Sets the `PacketType` of the packet.
+    fn set_type(&mut self, t: PacketType);
+
+    /// Creates a new packet. If the packet type also implements `PacketReadable`,
+    /// then the `get_data` method of the created packet must return `None`.
+    fn new_empty() -> Self;
+}
+
+/// Values implementing this trait can be received via a `Dialogue`.
+pub trait PacketReadable {
+    /// The data carried by the packet.
+    type Data;
+
+    /// Gets the `PacketType` of the packet.
+    fn get_id(&self) -> PacketId;
+
+    /// Gets the `PacketType` of the packet.
+    fn get_type(&self) -> PacketType;
+
+    /// Gets the data carried by the packet.
+    fn get_data(&self) -> Option<Self::Data>;
+
+    /// Returns whether the packet carries any data.
+    fn is_empty(&self) -> bool {
+        self.get_data().is_none()
+    }
+}

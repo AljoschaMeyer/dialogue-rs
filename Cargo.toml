@@ -1,0 +1,11 @@
+[package]
+name = "dialogue"
+version = "0.1.0"
+authors = ["AljoschaMeyer <mail@aljoscha-meyer.de>"]
+description = "A one-to-one communication multiplexing abstraction."
+repository = "https://github.com/AljoschaMeyer/dialogue-rs"
+readme = "README.md"
+license = "GPL-3.0"
+
+[dependencies]
+futures = "0.1.15"
