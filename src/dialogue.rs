@@ -1,3 +1,5 @@
+// TODO closing/aborting a Dialogue
+
 use std::marker::PhantomData;
 use std::fmt;
 use std::error::Error;
@@ -7,22 +9,51 @@ use futures::{Future, Sink, Stream, Poll, StartSend};
 use packet::{PacketWritable, PacketReadable, PacketId, PacketType};
 use transport_error::TransportError;
 
+/// Type-Level indicator for whether a `Dialogue` takes the server or the client
+/// role. This information determines behaviour during the closing handshake.
+pub trait Role {
+    /// Returns whether the corresponding `Dialogue` has the server role.
+    fn is_server() -> bool;
+}
+
+/// The server role.
+pub enum Server {}
+
+impl Role for Server {
+    fn is_server() -> bool {
+        true
+    }
+}
+
+/// The client role.
+pub enum Client {}
+
+impl Role for Client {
+    fn is_server() -> bool {
+        false
+    }
+}
+
 /// The main struct for communicating with a peer.
 ///
 /// Incoming packets are emitted via the `Stream` implementation of `Dialogue`.
 /// Packets can be sent via the corresponding methods of the struct.
-pub struct Dialogue<P, T, SinkErr, StreamErr, Data> {
+pub struct Dialogue<P, T, SinkErr, StreamErr, Data, R> {
     transport: T,
     packet_type: PhantomData<P>,
     sink_err_type: PhantomData<SinkErr>,
     stream_err_type: PhantomData<StreamErr>,
     data_type: PhantomData<Data>,
+    role_type: PhantomData<R>,
 }
 
-impl<P, T, SinkErr, StreamErr, Data> Dialogue<P, T, SinkErr, StreamErr, Data>
+impl<P, T, SinkErr, StreamErr, Data, R> Dialogue<P, T, SinkErr, StreamErr, Data, R>
     where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
-          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>,
+          R: Role
 {
+    /// Create a new `Dialogue` over the given transport.
+
     /// After starting sending packets via `message`, `request` or `duplex`
     /// this must be called to ensure that the packets have been written to the
     /// underlying transport. This simply delegates to `transport.poll_complete()`.
@@ -42,7 +73,7 @@ impl<P, T, SinkErr, StreamErr, Data> Dialogue<P, T, SinkErr, StreamErr, Data>
     /// If sending fails, the returned `Response` `Future` yields an error.
     ///
     /// You have to call poll_complete to actually send the packet.
-    pub fn request(&mut self, data: Data) -> Response<P, T, SinkErr, StreamErr, Data> {
+    pub fn request(&mut self, data: Data) -> Response<P, T, SinkErr, StreamErr, Data, R> {
         unimplemented!()
     }
 
@@ -54,7 +85,7 @@ impl<P, T, SinkErr, StreamErr, Data> Dialogue<P, T, SinkErr, StreamErr, Data>
     /// You have to call poll_complete to actually send the packet.
     pub fn sub_duplex(&mut self,
                       data: Data)
-                      -> SubDuplex<P, T, SinkErr, StreamErr, Data, OutSubDuplex> {
+                      -> SubDuplex<P, T, SinkErr, StreamErr, Data, OutSubDuplex, R> {
         unimplemented!()
     }
 
@@ -69,7 +100,7 @@ impl<P, T, SinkErr, StreamErr, Data> Dialogue<P, T, SinkErr, StreamErr, Data>
     ///
     /// In debug mode, this method checks `packet.get_type() == PacketType::Request`
     /// and panics if it does not return true.
-    pub fn packet_as_request(&mut self, packet: P) -> Request<P, T, SinkErr, StreamErr, Data> {
+    pub fn packet_as_request(&mut self, packet: P) -> Request<P, T, SinkErr, StreamErr, Data, R> {
         debug_assert!(packet.get_type() == PacketType::Request);
 
         unimplemented!()
@@ -86,7 +117,7 @@ impl<P, T, SinkErr, StreamErr, Data> Dialogue<P, T, SinkErr, StreamErr, Data>
     /// and panics if it does not return true.
     pub fn packet_as_sub_duplex(&mut self,
                                 packet: P)
-                                -> SubDuplex<P, T, SinkErr, StreamErr, Data, InSubDuplex> {
+                                -> SubDuplex<P, T, SinkErr, StreamErr, Data, InSubDuplex, R> {
         debug_assert!(packet.get_type() == PacketType::DuplexInitial);
 
         unimplemented!()
@@ -102,9 +133,10 @@ impl<P, T, SinkErr, StreamErr, Data> Dialogue<P, T, SinkErr, StreamErr, Data>
 ///
 /// Even if you want to ignore all incoming requests, you must still consume
 /// this stream. Else, responses from the peer are not consumed either.
-impl<P, T, SinkErr, StreamErr, Data> Stream for Dialogue<P, T, SinkErr, StreamErr, Data>
+impl<P, T, SinkErr, StreamErr, Data, R> Stream for Dialogue<P, T, SinkErr, StreamErr, Data, R>
     where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
-          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>,
+          R: Role
 {
     type Item = P;
     type Error = TransportError<SinkErr, StreamErr>;
@@ -134,18 +166,20 @@ impl Error for ClosedDialogue {
 /// A request that has been received from the peer.
 ///
 /// This implements `Future` to be notified when/if the peer cancels the request.
-pub struct Request<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> {
-    ps: &'ps mut Dialogue<P, T, SinkErr, StreamErr, Data>,
+pub struct Request<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, R: 'ps> {
+    ps: &'ps mut Dialogue<P, T, SinkErr, StreamErr, Data, R>,
 }
 
-impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Request<'ps,
-                                                                           P,
-                                                                           T,
-                                                                           SinkErr,
-                                                                           StreamErr,
-                                                                           Data>
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, R: 'ps> Request<'ps,
+                                                                                   P,
+                                                                                   T,
+                                                                                   SinkErr,
+                                                                                   StreamErr,
+                                                                                   Data,
+                                                                                   R>
     where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
-          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>,
+          R: Role
 {
     /// Gets the data that was sent with the request.
     pub fn get_data(&self) -> Data {
@@ -181,10 +215,12 @@ impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Request<'ps,
 /// The future completes when this request is cancelled. It may never complete.
 /// It is guaranteed to never yield an error (and the error type will be changed
 /// once `!` becomes a legal rust type).
-impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Future
-    for Request<'ps, P, T, SinkErr, StreamErr, Data>
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, R: 'ps> Future
+    for
+    Request<'ps, P, T, SinkErr, StreamErr, Data, R>
     where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
-          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>,
+          R: Role
 {
     type Item = ();
     type Error = ();
@@ -196,8 +232,8 @@ impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Future
 
 /// When dropping a `Request`, the corresponding `Dialogue` is notified so
 /// that it stops waiting for cancellation.
-impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Drop
-    for Request<'ps, P, T, SinkErr, StreamErr, Data> {
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, R: 'ps> Drop
+    for Request<'ps, P, T, SinkErr, StreamErr, Data, R> {
     fn drop(&mut self) {
         unimplemented!()
     }
@@ -239,16 +275,18 @@ pub struct SubDuplex<'ps,
                      SinkErr: 'ps,
                      StreamErr: 'ps,
                      Data: 'ps,
+                     R: 'ps,
                      SubDuplexType: 'static>
 {
-    ps: &'ps mut Dialogue<P, T, SinkErr, StreamErr, Data>,
+    ps: &'ps mut Dialogue<P, T, SinkErr, StreamErr, Data, R>,
     duplex_type: PhantomData<SubDuplexType>,
 }
 
-impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, SubDuplexType: 'static>
-    SubDuplex<'ps, P, T, SinkErr, StreamErr, Data, SubDuplexType>
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, R: 'ps, SubDuplexType: 'static>
+    SubDuplex<'ps, P, T, SinkErr, StreamErr, Data, R, SubDuplexType>
     where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
-          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>,
+          R: Role
 {
     /// Same as `close`, but the receiving duplex is given some error data.
     pub fn close_error(&mut self, err: Data) -> Poll<(), ClosedDialogue> {
@@ -273,11 +311,11 @@ impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, SubDuplexType
 /// An error is emitted if the Dialogue has closed.
 ///
 /// Use `close_error()` to terminate the duplex with an error value.
-impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, SubDuplexType: 'static> Sink
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, R: 'ps, SubDuplexType: 'static> Sink
     for
-    SubDuplex<'ps, P, T, SinkErr, StreamErr, Data, SubDuplexType>
+    SubDuplex<'ps, P, T, SinkErr, StreamErr, Data, R, SubDuplexType>
     where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
-          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>, R: Role
 {
     type SinkItem = Data;
     type SinkError = ClosedDialogue;
@@ -327,11 +365,19 @@ impl<Data: Error> Error for SubStreamError<Data> {
 
 /// Packet written to the peer's corresponding sink are passed to this sink.
 ///
-impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, SubDuplexType: 'static> Stream
+impl<'ps,
+     P: 'ps,
+     T: 'ps,
+     SinkErr: 'ps,
+     StreamErr: 'ps,
+     Data: 'ps,
+     R: 'static,
+     SubDuplexType: 'static> Stream
     for
-    SubDuplex<'ps, P, T, SinkErr, StreamErr, Data, SubDuplexType>
+    SubDuplex<'ps, P, T, SinkErr, StreamErr, Data, R, SubDuplexType>
     where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
-          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>,
+          R: Role
 {
     type Item = Data;
     type Error = SubStreamError<Data>;
@@ -343,9 +389,16 @@ impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, SubDuplexType
 
 /// When dropping a `SubDuplex`, the corresponding `Dialogue` is notified so
 /// that it stops waiting for more duplex packets.
-impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, SubDuplexType: 'static> Drop
+impl<'ps,
+     P: 'ps,
+     T: 'ps,
+     SinkErr: 'ps,
+     StreamErr: 'ps,
+     Data: 'ps,
+     R: 'ps,
+     SubDuplexType: 'static> Drop
     for
-    SubDuplex<'ps, P, T, SinkErr, StreamErr, Data, SubDuplexType> {
+    SubDuplex<'ps, P, T, SinkErr, StreamErr, Data, R, SubDuplexType> {
     fn drop(&mut self) {
         unimplemented!()
     }
@@ -353,18 +406,20 @@ impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, SubDuplexType
 
 /// This type represents the future response to a request. It also allows to
 /// cancel the original request.
-pub struct Response<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> {
-    ps: &'ps mut Dialogue<P, T, SinkErr, StreamErr, Data>,
+pub struct Response<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, R: 'ps> {
+    ps: &'ps mut Dialogue<P, T, SinkErr, StreamErr, Data, R>,
 }
 
-impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Response<'ps,
-                                                                            P,
-                                                                            T,
-                                                                            SinkErr,
-                                                                            StreamErr,
-                                                                            Data>
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, R: 'ps> Response<'ps,
+                                                                                    P,
+                                                                                    T,
+                                                                                    SinkErr,
+                                                                                    StreamErr,
+                                                                                    Data,
+                                                                                    R>
     where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
-          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>,
+          R: Role
 {
     /// Cancel the original request. To make sure the response has actually been
     /// sent, call `poll_complete` on either the `Response` or the `Dialogue`.
@@ -392,10 +447,12 @@ impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Response<'ps,
 ///
 /// If the original request has been cancelled by this side of the dialogue,
 /// this future may never resolve and should be `drop`ped.
-impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Future
-    for Response<'ps, P, T, SinkErr, StreamErr, Data>
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, R: 'ps> Future
+    for
+    Response<'ps, P, T, SinkErr, StreamErr, Data, R>
     where P: PacketReadable<Data = Data> + PacketWritable<Data = Data>,
-          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>
+          T: Sink<SinkItem = P, SinkError = SinkErr> + Stream<Item = P, Error = StreamErr>,
+          R: Role
 {
     type Item = Option<Data>;
     type Error = ClosedDialogue;
@@ -407,8 +464,8 @@ impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Future
 
 /// When dropping a `Response`, the corresponding `Dialogue` is notified so
 /// that it stops waiting for the response packet.
-impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps> Drop
-    for Response<'ps, P, T, SinkErr, StreamErr, Data> {
+impl<'ps, P: 'ps, T: 'ps, SinkErr: 'ps, StreamErr: 'ps, Data: 'ps, R: 'ps> Drop
+    for Response<'ps, P, T, SinkErr, StreamErr, Data, R> {
     fn drop(&mut self) {
         unimplemented!()
     }
